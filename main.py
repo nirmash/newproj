@@ -1,5 +1,8 @@
 import os
 import psycopg2
+from flask import Flask, jsonify
+
+app = Flask(__name__)
 
 DB_CONFIG = {
     "host": os.getenv("PGHOST", "localhost"),
@@ -10,38 +13,73 @@ DB_CONFIG = {
 }
 
 
-def main():
+def get_db():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
-    cur = conn.cursor()
+    return conn
 
-    # Create table
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS greetings (
-            id SERIAL PRIMARY KEY,
-            message TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
+
+def init_db():
+    """Create the greetings table if it doesn't exist."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS greetings (
+                id SERIAL PRIMARY KEY,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.close()
+        conn.close()
+    except Exception:
+        pass  # DB may not be available yet
+
+
+@app.route("/")
+def hello():
+    """Insert a greeting and return all greetings."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS greetings (
+                id SERIAL PRIMARY KEY,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        cur.execute(
+            "INSERT INTO greetings (message) VALUES (%s) RETURNING id",
+            ("Hello, World!",),
         )
-    """)
+        new_id = cur.fetchone()[0]
 
-    # Write
-    cur.execute(
-        "INSERT INTO greetings (message) VALUES (%s) RETURNING id",
-        ("Hello, World!",),
-    )
-    row_id = cur.fetchone()[0]
-    print(f"Inserted greeting with id={row_id}")
+        cur.execute("SELECT id, message, created_at FROM greetings ORDER BY id")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
 
-    # Read
-    cur.execute("SELECT id, message, created_at FROM greetings ORDER BY id")
-    rows = cur.fetchall()
-    print(f"\nAll greetings ({len(rows)} total):")
-    for row in rows:
-        print(f"  [{row[0]}] {row[1]}  (at {row[2]})")
+        return jsonify({
+            "inserted_id": new_id,
+            "greetings": [
+                {"id": r[0], "message": r[1], "created_at": str(r[2])}
+                for r in rows
+            ],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    cur.close()
-    conn.close()
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 
 if __name__ == "__main__":
-    main()
+    init_db()
+    port = int(os.getenv("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
