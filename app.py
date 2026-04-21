@@ -1,21 +1,23 @@
 import os
-import psycopg2
+import psycopg
 from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-DB_CONFIG = {
-    "host": os.getenv("PGHOST", "localhost"),
-    "port": os.getenv("PGPORT", "5432"),
-    "dbname": os.getenv("PGDATABASE", "postgres"),
-    "user": os.getenv("PGUSER", "postgres"),
-    "password": os.getenv("PGPASSWORD", "postgres"),
-}
+DB_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://{user}:{password}@{host}:{port}/{dbname}".format(
+        user=os.getenv("PGUSER", "postgres"),
+        password=os.getenv("PGPASSWORD", "postgres"),
+        host=os.getenv("PGHOST", "localhost"),
+        port=os.getenv("PGPORT", "5432"),
+        dbname=os.getenv("PGDATABASE", "postgres"),
+    ),
+)
 
 
 def get_db():
-    conn = psycopg2.connect(**DB_CONFIG)
-    conn.autocommit = True
+    conn = psycopg.connect(DB_URL, autocommit=True)
     return conn
 
 
