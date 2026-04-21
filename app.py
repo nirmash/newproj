@@ -1,4 +1,6 @@
 import os
+import subprocess
+import threading
 import psycopg
 from flask import Flask, jsonify, request, render_template_string
 
@@ -14,6 +16,45 @@ DB_URL = os.getenv(
         dbname=os.getenv("PGDATABASE", "postgres"),
     ),
 )
+
+_pg_ready = False
+_pg_lock = threading.Lock()
+
+
+def _run(cmd, **kwargs):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
+
+
+def ensure_postgres():
+    """Install and start PostgreSQL if not already running."""
+    global _pg_ready
+    if _pg_ready:
+        return
+    with _pg_lock:
+        if _pg_ready:
+            return
+        # Check if Postgres is already listening
+        r = _run("pg_isready -h 127.0.0.1 -p 5432")
+        if r.returncode == 0:
+            _pg_ready = True
+            return
+        # Install if missing
+        if _run("which pg_isready").returncode != 0:
+            _run("apt-get update -qq && apt-get install -y -qq postgresql postgresql-client > /dev/null 2>&1")
+        # Start cluster
+        _run("pg_ctlcluster 16 main start")
+        # Set password and auth
+        _run('su - postgres -c "psql -c \\"ALTER USER postgres PASSWORD \'postgres\';\\""')
+        _run("sed -i 's/local\\s*all\\s*all\\s*peer/local all all md5/' /etc/postgresql/16/main/pg_hba.conf")
+        _run("sed -i 's|host\\s*all\\s*all\\s*127.0.0.1/32\\s*scram-sha-256|host all all 127.0.0.1/32 md5|' /etc/postgresql/16/main/pg_hba.conf")
+        _run("pg_ctlcluster 16 main reload")
+        # Seed
+        _run(
+            'PGPASSWORD=postgres psql -U postgres -h 127.0.0.1 -c "'
+            "CREATE TABLE IF NOT EXISTS greetings (id SERIAL PRIMARY KEY, message TEXT NOT NULL, created_at TIMESTAMP DEFAULT NOW());"
+            "INSERT INTO greetings (message) VALUES ('Hello from startup!');\""
+        )
+        _pg_ready = True
 
 SQL_PAGE = """
 <!DOCTYPE html>
@@ -90,6 +131,7 @@ SQL_PAGE = """
 
 
 def get_db():
+    ensure_postgres()
     conn = psycopg.connect(DB_URL, autocommit=True)
     return conn
 
